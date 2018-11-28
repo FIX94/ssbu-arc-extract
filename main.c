@@ -22,7 +22,7 @@
 typedef struct _arc_hdr1 {
 	uint64_t magic; // 10 32 54 76 98 EF CD AB
 	uint64_t hdrsize; // 0x38
-	int64_t fil1_off;
+	int64_t fil1_off; // first offset shift
 	int64_t fil2_off;
 	int64_t hdr2_off; // first big header
 	int64_t hdr3_off; // second big header
@@ -32,21 +32,21 @@ typedef struct _arc_hdr1 {
 //at hdr2_off
 typedef struct _arc_hdr2 {
 	uint32_t hdrlen;
-	// entries probably for files past 2gb
+	// handles file structure after 2gb, can be compressed
 	uint32_t struct6_11_enum; //0x64EE
-	uint32_t somenum1;
+	uint32_t struct7_enum_part1; //0x8DE9, first half of 0x8F83
 	uint32_t struct9_14_enum1; //0x73BBA
-	uint32_t somenum2;
+	uint32_t struct10_enum_part1; //0x860D1, first half of 0x89B11
 	uint32_t struct13_enum; //0x73376
 	uint32_t struct8_enum; //0x64D1
 	uint32_t struct9_14_enum2; //0x73BBA
-	uint32_t sumenum3;
-	uint32_t sumenum4;
+	uint32_t struct7_enum_part2; //0x19A, second half of 0x8DE9
+	uint32_t struct10_enum_part2; //0x3A40, second half of 0x89B11
 	uint32_t sumenum5;
 	uint32_t somenum6;
 	uint32_t somenum7;
 	uint32_t somenum8;
-	// entries for first 2gb of file
+	// handles file structure of first 2gb, streamed music/video
 	uint32_t struct1_2_enum; //0x980
 	uint32_t struct3_enum; //0x1501
 	uint32_t struct4_enum; //0xAA1
@@ -66,14 +66,14 @@ typedef struct _arc_hdr2 {
 
 // the first 2gb are handled by the following 4 structs
 
-// at hdr2_off+0x68, 0x4C00 bytes, first hash table sorted by length of name hashed
+// at hdr2_off+0x68, 0x4C00 bytes, 0x980 entries, first hash table sorted by name hash length value
 typedef struct _hdr2_struct1 {
 	uint32_t fullpathhash;
 	uint8_t fullpathhashlen;
 	uint8_t struct2_index[3];
 } hdr2_struct1;
 
-// at hdr2_off+0x4C68, 0x7200 bytes, second hash table sorts by index into id table
+// at hdr2_off+0x4C68, 0x7200 bytes, 0x980 entries, second hash table sorts by increasing index
 typedef struct _hdr2_struct2 {
 	uint32_t fullpathhash;
 	uint8_t fullpathhashlen;
@@ -86,7 +86,7 @@ typedef struct _hdr2_struct2 {
 	uint32_t numfiles;
 } hdr2_struct2;
 
-// at hdr2_off+0xBE68, 0x5404 bytes, file id table, to point to exact file number below
+// at hdr2_off+0xBE68, 0x5404 bytes, 0x1501 entries, file id table, to point to exact file number below
 typedef struct _hdr2_struct3 {
 	uint32_t struct4_index;
 } hdr2_struct3;
@@ -97,7 +97,7 @@ typedef struct _hdr2_struct4 {
 	uint64_t off;
 } hdr2_struct4;
 
-// TODO: figure out struct uses below
+// TODO: figure out all struct uses below
 // at hdr2_off+0x1BC7C, 0xA8 bytes, 0xE elements
 typedef struct _hdr2_struct5 {
 	uint32_t unk1;
@@ -107,30 +107,35 @@ typedef struct _hdr2_struct5 {
 
 // at hdr2_off+0x1BD24, 0x148058 bytes, 0x64EE elements
 typedef struct _hdr2_struct6 {
-	uint32_t unk1;
-	uint32_t unk2;
+	uint32_t somehash1;
+	uint8_t somehashlen1;
+	uint8_t struct7_enum[3]; //needed to get full file offset
+	uint32_t somehash2;
+	uint8_t somehashlen2;
+	uint8_t unk1[3];
+	uint32_t somehash3;
+	uint8_t somehashlen3;
+	uint8_t unk2[3];
 	uint32_t unk3;
 	uint32_t unk4;
+	uint32_t someindex;
 	uint32_t unk5;
 	uint32_t unk6;
 	uint32_t unk7;
 	uint32_t unk8;
-	uint32_t unk9;
-	uint32_t unk10;
-	uint32_t unk11;
-	uint32_t unk12;
-	uint32_t unk13;
 } hdr2_struct6;
 
-// at hdr2_off+0x163D7C, 0xFB238 bytes, 0x8F82 elements
+// at hdr2_off+0x163D7C, 0xFB254 bytes, 0x8F83 elements
 typedef struct _hdr2_struct7 {
+	//not quite all, also have to add fil1_off from arc_hdr1
+	//also offsets+size seem to go all the way up to hdr2_off
+	uint64_t base_offset;
 	uint32_t unk1;
+	//seems to be set right before next base offset
+	uint32_t base_size;
 	uint32_t unk2;
 	uint32_t unk3;
 	uint32_t unk4;
-	uint32_t unk5;
-	uint32_t unk6;
-	uint32_t unk7;
 } hdr2_struct7;
 
 // at hdr2_off+0x25EFD0, 0x32688 bytes, 0x64D1 entries, name single hashes
@@ -142,34 +147,37 @@ typedef struct _hdr2_struct8 {
 
 // at hdr2_off+0x291658, 0x1215510 bytes, 0x73BBA entries, name multi hashes
 typedef struct _hdr2_struct9 {
-	uint32_t fullpathhash;
+	uint32_t fullpathhash; //full path plus name plus extension
 	uint8_t fullpathhashlen;
-	uint8_t unk1[3];
-	uint32_t extensionhash;
+	uint8_t struct6_11_enum[3];
+	uint32_t extensionhash; //extension after the .
 	uint8_t extensionhashlen;
-	uint8_t unk2[3];
-	uint32_t pathhash;
+	uint8_t unk1[3];
+	uint32_t pathhash; //path before filename WITH trailing /
 	uint8_t pathhashlen;
-	uint8_t unk3[3];
-	uint32_t filehash;
+	uint8_t unk2[3];
+	uint32_t filehash; //filename after trailing /
 	uint8_t filenhashlen;
-	uint8_t unk4[3];
-	uint32_t unk5;
-	uint32_t unk6;
+	uint8_t unk3[3];
+	uint32_t struct10_enum;
+	uint32_t unk4;
 } hdr2_struct9;
 
-// at hdr2_off+0x14A6B68, 0x89B110 bytes, 0x89B11 entries
+// at hdr2_off+0x14A6B68, 0x89B110 bytes, 0x89B11 entries, lists every file (?)
 typedef struct _hdr2_struct10 {
-	uint32_t unk1;
-	uint32_t unk2;
-	uint32_t unk3;
-	uint32_t unk4;
+	// multiple local offset by 4 and add on top of struct 7 offset to get full file offset
+	uint32_t file_local_offset;
+	uint32_t file_len_cmp;
+	uint32_t file_len_decmp;
+	uint32_t unk2; //possibly compressed flag, compression is done with zstd
 } hdr2_struct10;
 
 // at hdr2_off+0x1D41C78, 0x32770 bytes, 0x64EE entries
 typedef struct _hdr2_struct11 {
-	uint32_t unk1;
-	uint32_t unk2;
+	uint32_t somehash;
+	uint8_t somehashlen;
+	//every entry just adds 1 to this
+	uint8_t num[3];
 } hdr2_struct11;
 
 // at hdr2_off+0x1D743E8, 8 bytes
@@ -186,8 +194,9 @@ typedef struct _hdr2_struct12 {
 
 // at hdr2_off+0x1D763F0, 0x399BB0 bytes, 0x73376 entries
 typedef struct _hdr2_struct13 {
-	uint32_t unk1;
-	uint32_t unk2;
+	uint32_t fullpathhash;
+	uint8_t fullpathhashlen;
+	uint8_t someindex[3]; //possibly similar index to struct 6
 } hdr2_struct13;
 
 // at hdr2_off+0x210FFA0, 0x39DDD0 bytes, 0x73BBA entries
@@ -199,6 +208,66 @@ typedef struct _hdr2_struct14 {
 
 // done, all 0x24ADD70 bytes of hdr2 processed,
 // hdr3 follows right behind it, TODO: look at hdr3 in more detail
+typedef struct _arc_hdr3 {
+	uint32_t hdrlen;
+	uint32_t empty;
+	// also used for files past 2gb in some way I think
+	uint32_t struct1_2_enum; //0x7541
+	uint32_t struct3_4_5_enum1; //0x80272
+	uint32_t struct3_4_5_enum2; //0x80272
+} arc_hdr3;
+
+//at hdr3_off+0x14, 0x3AA08 bytes, 0x7541 entries
+typedef struct _hdr3_struct1 {
+	uint32_t somehash;
+	uint8_t somehashlen;
+	uint8_t unk1[3];
+} hdr3_struct1;
+
+//at hdr3_off+0x3AA1C, 0xEA820 bytes, 0x7541 entries
+typedef struct _hdr3_struct2 {
+	uint32_t somehash1;
+	uint8_t somehashlen1;
+	uint8_t unk1[3];
+	uint32_t somehash2;
+	uint8_t somehashlen2;
+	uint8_t unk2[3];
+	uint32_t somehash3;
+	uint8_t somehashlen3;
+	uint8_t unk3[3];
+	uint32_t unk4;
+	uint32_t unk5;
+} hdr3_struct2;
+
+//at hdr3_off+0x12523C, 0x401390 bytes, 0x80272 entries, though first 0x729D are blank!
+typedef struct _hdr3_struct3 {
+	uint32_t somehash;
+	uint8_t somehashlen;
+	uint8_t unk1[3];
+} hdr3_struct3;
+
+//at hdr_off+0x5265CC, 0x1E3F54 bytes, 0x80272 entries
+typedef struct _hdr3_struct4 {
+	uint32_t num; //just counts up
+} hdr3_struct4;
+
+// at hdr3_off+0x726F94, 0xF1FAA0 bytes, 0x80272 entries, name multi hashes
+typedef struct _hdr3_struct5 {
+	uint32_t fullpathhash; //full path plus name plus extension
+	uint8_t fullpathhashlen;
+	uint8_t unk1[3];
+	uint32_t pathhash; //path before filename WITHOUT trailing /
+	uint8_t pathhashlen;
+	uint8_t unk2[3];
+	uint32_t filehash; //filename after trailing /
+	uint8_t filenhashlen;
+	uint8_t unk3[3];
+	uint32_t extensionhash; //extension after the .
+	uint8_t extensionhashlen;
+	uint8_t unk4[3];
+} hdr3_struct5;
+
+// done, end of hdr3, end of file
 
 //TOC of NUS3 PACK
 typedef struct _nustoc {
