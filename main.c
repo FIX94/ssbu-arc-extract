@@ -24,8 +24,8 @@
 typedef struct __attribute__((__packed__)) _arc_hdr1 {
 	uint64_t magic; // 10 32 54 76 98 EF CD AB
 	uint64_t hdrsize; // 0x38
-	int64_t fil1_off; // first offset shift
-	int64_t fil2_off;
+	int64_t fil1_off; // table 1 start, main offset shift
+	int64_t fil2_off; // table 2 start, seemingly just for reference
 	int64_t hdr2_off; // first big header
 	int64_t hdr3_off; // second big header
 	uint64_t empty;
@@ -36,14 +36,14 @@ typedef struct __attribute__((__packed__)) _arc_hdr2 {
 	uint32_t hdrlen;
 	// handles file structure after 2gb, can be compressed
 	uint32_t struct6_11_enum; //0x64EE
-	uint32_t struct7_enum_part1; //0x8DE9, first half of 0x8F83
+	uint32_t struct7_enum_part1; //0x8DE9, table 1 length (referenced by struct 9), first half of 0x8F83
 	uint32_t struct9_14_enum1; //0x73BBA
-	uint32_t struct10_enum_part1; //0x860D1, first half of 0x89B11
+	uint32_t struct10_enum_part1; //0x860D1, table 1 length (referenced by struct 9), first half of 0x89B11
 	uint32_t struct13_enum; //0x73376
 	uint32_t struct8_enum; //0x64D1
 	uint32_t struct9_14_enum2; //0x73BBA
-	uint32_t struct7_enum_part2; //0x19A, second half of 0x8F83
-	uint32_t struct10_enum_part2; //0x3A40, second half of 0x89B11
+	uint32_t struct7_enum_part2; //0x19A, table 2 length (referenced by struct 10), second half of 0x8F83
+	uint32_t struct10_enum_part2; //0x3A40, table 2 length (referenced by struct 10), second half of 0x89B11
 	uint32_t sumenum5;
 	uint32_t somenum6;
 	uint32_t somenum7;
@@ -121,11 +121,11 @@ typedef struct __attribute__((__packed__)) _hdr2_struct6 {
 	uint8_t unk2[3];
 	uint32_t unk3;
 	uint32_t unk4;
-	uint32_t someindex;
+	uint32_t s9_idx_start; //first struct 9 index for this group
+	uint32_t s9_idx_num; //number of struct 9 using this
 	uint32_t unk5;
+	uint32_t s9_idx_start2; //first 2 numbers of s9_idx_start?
 	uint32_t unk6;
-	uint32_t unk7;
-	uint32_t unk8;
 } hdr2_struct6;
 
 // at hdr2_off+0x163D7C, 0xFB254 bytes, 0x8F83 elements
@@ -138,7 +138,8 @@ typedef struct __attribute__((__packed__)) _hdr2_struct7 {
 	uint32_t base_size;
 	uint32_t unk2;
 	uint32_t unk3;
-	uint32_t unk4;
+	//if table 2 is used, this is the self-reference for that offset
+	uint32_t s7_tbl2_ref;
 } hdr2_struct7;
 
 // at hdr2_off+0x25EFD0, 0x32688 bytes, 0x64D1 entries, name single hashes
@@ -155,15 +156,15 @@ typedef struct __attribute__((__packed__)) _hdr2_struct9 {
 	uint8_t struct6_11_enum[3];
 	uint32_t extensionhash; //extension after the .
 	uint8_t extensionhashlen;
-	uint8_t unk1[3];
+	uint8_t ext_struct10_enum[3]; //this may be a possible 2nd entry into struct10!
 	uint32_t pathhash; //path before filename WITH trailing /
 	uint8_t pathhashlen;
-	uint8_t unk2[3];
+	uint8_t unk1[3];
 	uint32_t filehash; //filename after trailing /
 	uint8_t filenhashlen;
-	uint8_t unk3[3];
+	uint8_t unk2[3];
 	uint32_t struct10_enum;
-	uint32_t unk4;
+	uint32_t unk3;
 } hdr2_struct9;
 
 // at hdr2_off+0x14A6B68, 0x89B110 bytes, 0x89B11 entries, lists every file (?)
@@ -383,7 +384,7 @@ static void write_found_file(FILE *in, uint8_t *buf, const char *inname, uint64_
 
 int main(int argc, char *argv[])
 {
-	puts("Smash Ultimate ARC Extract WIP-2 by FIX94");
+	puts("Smash Ultimate ARC Extract WIP-3 by FIX94");
 	FILE *data = fopen("data.arc", "rb");
 	if(!data)
 	{
@@ -679,19 +680,43 @@ int main(int argc, char *argv[])
 					uint32_t s7_enum = struct6_ptr[s6_11_enum].struct7_enum[0] | (struct6_ptr[s6_11_enum].struct7_enum[1] << 8) 
 									| (struct6_ptr[s6_11_enum].struct7_enum[2] << 16);
 					uint32_t s10_enum = struct9_ptr[s9num].struct10_enum;
+					if(!struct10_ptr[s10_enum].file_len_decmp) //empty file
+					{
+						puts("No decmp filesize, exit\n");
+						break;
+					}
+					else if(!struct10_ptr[s10_enum].file_len_cmp) //file linked in table 1
+					{
+						uint32_t s9_link_enum = (struct10_ptr[s10_enum].flags&0x00FFFFFF);
+						s6_11_enum = struct9_ptr[s9_link_enum].struct6_11_enum[0] | (struct9_ptr[s9_link_enum].struct6_11_enum[1] << 8) 
+										| (struct9_ptr[s9_link_enum].struct6_11_enum[2] << 16);
+						s7_enum = struct6_ptr[s6_11_enum].struct7_enum[0] | (struct6_ptr[s6_11_enum].struct7_enum[1] << 8) 
+										| (struct6_ptr[s6_11_enum].struct7_enum[2] << 16);
+						s10_enum = struct9_ptr[s9_link_enum].struct10_enum;
+						printf("File in table 1 linked to s9 entry %08x\n", s9_link_enum);
+					}
+					else if((struct10_ptr[s10_enum].flags&0x08000000)) //file is part of table 2!
+					{
+						s7_enum = struct7_ptr[s7_enum].s7_tbl2_ref;
+						s10_enum = hdr2.struct10_enum_part1+(struct10_ptr[s10_enum].flags&0x00FFFFFF);
+						printf("File in table 2 linked to s9 entry %08x\n", (struct10_ptr[s10_enum].flags&0x00FFFFFF));
+					}
+					else if(struct10_ptr[s10_enum].flags && (struct10_ptr[s10_enum].flags&0x03000000) != 0x03000000)
+						printf("Unknown struct 10 flag %08x\n", struct10_ptr[s10_enum].flags);
 					uint64_t file_offset = hdr1.fil1_off+struct7_ptr[s7_enum].base_offset+(struct10_ptr[s10_enum].file_local_offset<<2);
 					uint32_t file_size = struct10_ptr[s10_enum].file_len_cmp;
-					if(struct10_ptr[s10_enum].flags == 0x03000000 && struct10_ptr[s10_enum].file_len_decmp)
+					if(!file_size) //should never happen
+					{
+						puts("No cmp filesize, exit\n");
+						break;
+					}
+					if((struct10_ptr[s10_enum].flags&0x03000000) == 0x03000000)
 					{
 						puts("File compressed, attempting to decompress");
 						write_found_file(data, iobuf, argv[1], file_offset, file_size, true, struct10_ptr[s10_enum].file_len_decmp);
 					}
 					else
-					{
-						if(struct10_ptr[s10_enum].flags != 0)
-							printf("Unknown struct 10 flag %08x\n", struct10_ptr[s10_enum].flags);
 						write_found_file(data, iobuf, argv[1], file_offset, file_size, false, 0);
-					}
 					break;
 				}
 			}
