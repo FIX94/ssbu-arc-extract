@@ -286,6 +286,8 @@ static nustoc audio_offset[AUDIOMAXF];
 static char audio_name[FILENAMELEN];
 static char filewritename[FILENAMELEN];
 
+static const char *arg_repl = "replace";
+
 //all the magic words to check for
 
 static const uint8_t streamname[8] = { 0x73, 0x74, 0x72, 0x65, 0x61, 0x6D, 0x3A, 0x2F };  //stream:/
@@ -382,14 +384,101 @@ static void write_found_file(FILE *in, uint8_t *buf, const char *inname, uint64_
 	}
 }
 
+static void *read_struct_raw(FILE *rf, uint64_t offset, uint32_t len)
+{
+	void *rbuf = malloc(len);
+	if(!rbuf) return NULL;
+	fseeko64(rf, offset, SEEK_SET);
+	fread(rbuf, 1, len, rf);
+	return rbuf;
+}
+
+static const char *get_fname(const char *path)
+{
+	if(strrchr(path,'/') != NULL && strrchr(path,'/')+1 != '\0') path = strrchr(path,'/')+1;
+	if(strrchr(path,'\\') != NULL && strrchr(path,'\\')+1 != '\0') path = strrchr(path,'\\')+1;
+	return path;
+}
+
+#define MODE_EXTRACT_STREAM 0
+#define MODE_EXTRACT_NAME 1
+#define MODE_REPLACE_NAME 2
+
 int main(int argc, char *argv[])
 {
-	puts("Smash Ultimate ARC Extract WIP-3 by FIX94");
-	FILE *data = fopen("data.arc", "rb");
+	puts("Smash Ultimate ARC Extract WIP-4 by FIX94");
+	FILE *data = NULL, *repl_file = NULL, *clean_structs_fp = NULL;
+	hdr2_struct1 *struct1_ptr = NULL; hdr2_struct2 *struct2_ptr = NULL;
+	hdr2_struct3 *struct3_ptr = NULL; hdr2_struct4 *struct4_ptr = NULL;
+	hdr2_struct5 *struct5_ptr = NULL; hdr2_struct6 *struct6_ptr = NULL;
+	hdr2_struct7 *struct7_ptr = NULL; hdr2_struct8 *struct8_ptr = NULL;
+	hdr2_struct9 *struct9_ptr = NULL; hdr2_struct10 *struct10_ptr = NULL;
+	hdr2_struct4 *repl_clean_struct4_ptr = NULL;
+	hdr2_struct10 *repl_clean_struct10_ptr = NULL;
+	void *repl_buf_cmp = NULL; uint32_t repl_size_cmp = 0;
+	void *repl_buf_decmp = NULL; uint32_t repl_size_decmp = 0;
+	void *iobuf = NULL;
+	int program_mode;
+	const char *find_name_full = NULL, *find_name_fname = NULL;
+	//no single filename given, extract all stream:// files
+	if(argc < 2)
+	{
+		puts("Extracting lopus/webm Files");
+		program_mode = MODE_EXTRACT_STREAM;
+	}
+	else
+	{
+		if(strlen(argv[1]) == strlen(arg_repl) && memcmp(argv[1], arg_repl, strlen(arg_repl)) == 0)
+		{
+			puts("Single Replace Mode");
+			if(argc < 3)
+			{
+				puts("ERROR: No filename given to replace!");
+				goto end;
+			}
+			else
+			{
+				program_mode = MODE_REPLACE_NAME;
+				find_name_full = argv[2];
+				find_name_fname = get_fname(find_name_full);
+				repl_file = fopen(find_name_fname, "rb");
+				if(!repl_file)
+				{
+					printf("ERROR: Unable to open \"%s\" to replace!\n", find_name_fname);
+					goto end;
+				}
+				fseek(repl_file, 0, SEEK_END);
+				repl_size_decmp = ftell(repl_file);
+				if(!repl_size_decmp)
+				{
+					printf("ERROR: \"%s\" appears to be empty, abort\n", find_name_fname);
+					goto end;
+				}
+				repl_buf_decmp = malloc(repl_size_decmp);
+				if(!repl_buf_decmp)
+				{
+					printf("ERROR: unable to allocate %i bytes!\n", repl_size_decmp);
+					goto end;
+				}
+				fseek(repl_file, 0, SEEK_SET);
+				fread(repl_buf_decmp, 1, repl_size_decmp, repl_file);
+				fclose(repl_file);
+				repl_file = NULL;
+			}
+		}
+		else
+		{
+			puts("Single Extract Mode");
+			program_mode = MODE_EXTRACT_NAME;
+			find_name_full = argv[1];
+			find_name_fname = get_fname(find_name_full);
+		}
+	}
+	data = fopen("data.arc", "rb");
 	if(!data)
 	{
 		puts("No data.arc in current directory!");
-		return 0;
+		goto end;
 	}
 	puts("Checking data.arc");
 	//quick sanity check
@@ -399,16 +488,14 @@ int main(int argc, char *argv[])
 	if(hdr1.hdrsize != 0x38 || hdr1.hdr2_off == 0)
 	{
 		puts("data.arc header 1 incorrect!");
-		fclose(data);
-		return 0;
+		goto end;
 	}
 	//get to our file header
 	fseeko64(data, hdr1.hdr2_off, SEEK_SET);
 	if(ftello64(data) != hdr1.hdr2_off)
 	{
 		puts("data.arc seems to be too small!");
-		fclose(data);
-		return 0;
+		goto end;
 	}
 	//verify file is big enough
 	arc_hdr2 hdr2;
@@ -417,45 +504,90 @@ int main(int argc, char *argv[])
 	if(hdr2.hdrlen == 0)
 	{
 		puts("data.arc header 2 size missing!");
-		fclose(data);
-		return 0;
+		goto end;
 	}
 	fseeko64(data, hdr1.hdr2_off+hdr2.hdrlen, SEEK_SET);
 	if(ftello64(data) != hdr1.hdr2_off+hdr2.hdrlen)
 	{
 		puts("data.arc seems to be too small!");
-		fclose(data);
-		return 0;
+		goto end;
 	}
-	void *iobuf = malloc(IOBUFLEN);
+	iobuf = malloc(IOBUFLEN);
 	//all used struct lengths
-	uint32_t hdr2_struct1_len = sizeof(hdr2_struct1)*hdr2.struct1_2_enum;
-	uint32_t hdr2_struct2_len = sizeof(hdr2_struct2)*hdr2.struct1_2_enum;
-	uint32_t hdr2_struct3_len = sizeof(hdr2_struct3)*hdr2.struct3_enum;
-	uint32_t hdr2_struct4_len = sizeof(hdr2_struct4)*hdr2.struct4_enum;
-	uint32_t hdr2_struct5_len = sizeof(hdr2_struct5)*0xE; //not sure where that number is from yet..
-	uint32_t hdr2_struct6_len = sizeof(hdr2_struct6)*hdr2.struct6_11_enum;
-	uint32_t hdr2_struct7_len = sizeof(hdr2_struct7)*(hdr2.struct7_enum_part1+hdr2.struct7_enum_part2);
-	uint32_t hdr2_struct8_len = sizeof(hdr2_struct8)*hdr2.struct8_enum;
-	uint32_t hdr2_struct9_len = sizeof(hdr2_struct9)*hdr2.struct9_14_enum1;
-	uint32_t hdr2_struct10_len = sizeof(hdr2_struct10)*(hdr2.struct10_enum_part1+hdr2.struct10_enum_part2);
-	//no single filename given, extract all stream:// files
-	if(argc < 2)
+	uint32_t hdr2_struct1_len = sizeof(hdr2_struct1)*hdr2.struct1_2_enum,
+		hdr2_struct2_len = sizeof(hdr2_struct2)*hdr2.struct1_2_enum,
+		hdr2_struct3_len = sizeof(hdr2_struct3)*hdr2.struct3_enum,
+		hdr2_struct4_len = sizeof(hdr2_struct4)*hdr2.struct4_enum,
+		hdr2_struct5_len = sizeof(hdr2_struct5)*0xE, //not sure where that number is from yet..
+		hdr2_struct6_len = sizeof(hdr2_struct6)*hdr2.struct6_11_enum,
+		hdr2_struct7_len = sizeof(hdr2_struct7)*(hdr2.struct7_enum_part1+hdr2.struct7_enum_part2),
+		hdr2_struct8_len = sizeof(hdr2_struct8)*hdr2.struct8_enum,
+		hdr2_struct9_len = sizeof(hdr2_struct9)*hdr2.struct9_14_enum1,
+		hdr2_struct10_len = sizeof(hdr2_struct10)*(hdr2.struct10_enum_part1+hdr2.struct10_enum_part2);
+	//all used struct offsets
+	uint64_t hdr2_struct1_off = hdr1.hdr2_off+sizeof(arc_hdr2), hdr2_struct2_off = hdr2_struct1_off+hdr2_struct1_len,
+			hdr2_struct3_off = hdr2_struct2_off+hdr2_struct2_len, hdr2_struct4_off = hdr2_struct3_off+hdr2_struct3_len,
+			hdr2_struct5_off = hdr2_struct4_off+hdr2_struct4_len, hdr2_struct6_off = hdr2_struct5_off+hdr2_struct5_len,
+			hdr2_struct7_off = hdr2_struct6_off+hdr2_struct6_len, hdr2_struct8_off = hdr2_struct7_off+hdr2_struct7_len,
+			hdr2_struct9_off = hdr2_struct8_off+hdr2_struct8_len, hdr2_struct10_off = hdr2_struct9_off+hdr2_struct9_len;
+	//read out all used structs
+	struct1_ptr = (hdr2_struct1*)read_struct_raw(data, hdr2_struct1_off, hdr2_struct1_len);
+	struct2_ptr = (hdr2_struct2*)read_struct_raw(data, hdr2_struct2_off, hdr2_struct2_len);
+	struct3_ptr = (hdr2_struct3*)read_struct_raw(data, hdr2_struct3_off, hdr2_struct3_len);
+	struct4_ptr = (hdr2_struct4*)read_struct_raw(data, hdr2_struct4_off, hdr2_struct4_len);
+	struct5_ptr = (hdr2_struct5*)read_struct_raw(data, hdr2_struct5_off, hdr2_struct5_len);
+	struct6_ptr = (hdr2_struct6*)read_struct_raw(data, hdr2_struct6_off, hdr2_struct6_len);
+	struct7_ptr = (hdr2_struct7*)read_struct_raw(data, hdr2_struct7_off, hdr2_struct7_len);
+	struct8_ptr = (hdr2_struct8*)read_struct_raw(data, hdr2_struct8_off, hdr2_struct8_len);
+	struct9_ptr = (hdr2_struct9*)read_struct_raw(data, hdr2_struct9_off, hdr2_struct9_len);
+	struct10_ptr = (hdr2_struct10*)read_struct_raw(data, hdr2_struct10_off, hdr2_struct10_len);
+	//replace mode, open file further for writing
+	if(repl_buf_decmp)
 	{
-		puts("No filename given, extracting lopus/webm files");
+		clean_structs_fp = fopen("data_arc_structs", "rb");
+		if(!clean_structs_fp)
+		{
+			puts("No structs file, creating one");
+			clean_structs_fp = fopen("data_arc_structs", "wb");
+			if(!clean_structs_fp)
+			{
+				puts("Unable to open structs file for writing!");
+				goto end;
+			}
+			fwrite(struct4_ptr, 1, hdr2_struct4_len, clean_structs_fp);
+			fwrite(struct10_ptr, 1, hdr2_struct10_len, clean_structs_fp);
+			fclose(clean_structs_fp);
+			clean_structs_fp = fopen("data_arc_structs", "rb");
+			if(!clean_structs_fp)
+			{
+				puts("Still no structs file, abort");
+				goto end;
+			}
+		}
+		fseek(clean_structs_fp, 0, SEEK_END);
+		if(ftello64(clean_structs_fp) != hdr2_struct4_len+hdr2_struct10_len)
+		{
+			puts("Structs file size unexpected, abort");
+			goto end;
+		}
+		repl_clean_struct4_ptr = (hdr2_struct4*)read_struct_raw(clean_structs_fp, 0, hdr2_struct4_len);
+		repl_clean_struct10_ptr = (hdr2_struct10*)read_struct_raw(clean_structs_fp, hdr2_struct4_len, hdr2_struct10_len);
+		fclose(clean_structs_fp);
+		clean_structs_fp = NULL;
+		puts("Read in structs file");
+		fclose(data);
+		data = fopen("data.arc", "rb+");
+		if(!data)
+		{
+			puts("Unable to open data.arc for writing!");
+			goto end;
+		}
+	}
+	if(program_mode == MODE_EXTRACT_STREAM)
+	{
 		//make sure output folders exist
 		mkdir("lopus");
 		mkdir("webm");
-		//skip all the way to struct 4, the offset table
-		fseeko64(data, hdr1.hdr2_off+sizeof(arc_hdr2), SEEK_SET);
-		fseeko64(data, hdr2_struct1_len, SEEK_CUR);
-		fseeko64(data, hdr2_struct2_len, SEEK_CUR);
-		fseeko64(data, hdr2_struct3_len, SEEK_CUR);
-		//read struct 4
-		printf("Reading struct 4 (struct len %08x, total %08x bytes)\n", sizeof(hdr2_struct4), hdr2_struct4_len);
-		void *raw_struct4_buf = malloc(hdr2_struct4_len);
-		fread(raw_struct4_buf, 1, hdr2_struct4_len, data);
-		hdr2_struct4 *struct4_ptr = (hdr2_struct4*)raw_struct4_buf;
 		uint16_t sometocnum;
 		uint16_t webmcnt = 0;
 		uint8_t magicchk[8];
@@ -577,40 +709,21 @@ int main(int argc, char *argv[])
 					printf("Unkown file type at file %i\n", sometocnum);
 			}
 		}
-		free(raw_struct4_buf);
 	}
 	else
 	{
-		printf("Attempting to extract %s\n", argv[1]);
-		if(strlen(argv[1]) > sizeof(streamname) && memcmp(argv[1], streamname, sizeof(streamname)) == 0)
+		printf("Looking for %s\n", find_name_full);
+		//hash filename
+		uint32_t thecrc32 = crc32simple((void*)find_name_full, strlen(find_name_full));
+		printf("Seaching for file CRC32 %08x\n", thecrc32);
+		if(strlen(find_name_full) > sizeof(streamname) && memcmp(find_name_full, streamname, sizeof(streamname)) == 0)
 		{
 			puts("Stream file, looking in lower structs");
-			//skip to struct 2
-			fseeko64(data, hdr1.hdr2_off+sizeof(arc_hdr2), SEEK_SET);
-			fseeko64(data, hdr2_struct1_len, SEEK_CUR);
-			//read struct 2
-			printf("Reading struct 2 (struct len %08x, total %08x bytes)\n", sizeof(hdr2_struct2), hdr2_struct2_len);
-			void *raw_struct2_buf = malloc(hdr2_struct2_len);
-			fread(raw_struct2_buf, 1, hdr2_struct2_len, data);
-			hdr2_struct2 *struct2_ptr = (hdr2_struct2*)raw_struct2_buf;
-			//read struct 3
-			printf("Reading struct 3 (struct len %08x, total %08x bytes)\n", sizeof(hdr2_struct3), hdr2_struct3_len);
-			void *raw_struct3_buf = malloc(hdr2_struct3_len);
-			fread(raw_struct3_buf, 1, hdr2_struct3_len, data);
-			hdr2_struct3 *struct3_ptr = (hdr2_struct3*)raw_struct3_buf;
-			//read struct 4
-			printf("Reading struct 4 (struct len %08x, total %08x bytes)\n", sizeof(hdr2_struct4), hdr2_struct4_len);
-			void *raw_struct4_buf = malloc(hdr2_struct4_len);
-			fread(raw_struct4_buf, 1, hdr2_struct4_len, data);
-			hdr2_struct4 *struct4_ptr = (hdr2_struct4*)raw_struct4_buf;
-			//hash filename
-			uint32_t thecrc32 = crc32simple(argv[1], strlen(argv[1]));
-			printf("Seaching for file CRC32 %08x\n", thecrc32);
 			//parse struct 2
 			uint32_t s2num;
 			for(s2num = 0; s2num < hdr2.struct1_2_enum; s2num++)
 			{
-				if(struct2_ptr[s2num].fullpathhash == thecrc32 && struct2_ptr[s2num].fullpathhashlen == strlen(argv[1]))
+				if(struct2_ptr[s2num].fullpathhash == thecrc32 && struct2_ptr[s2num].fullpathhashlen == strlen(find_name_full))
 				{
 					printf("Found file at struct 2 entry %08x!\n", s2num);
 					uint32_t s3_enum = struct2_ptr[s2num].struct3_enum[0] | (struct2_ptr[s2num].struct3_enum[1] << 8) 
@@ -621,58 +734,43 @@ int main(int argc, char *argv[])
 					printf("Writing struct 4 entry %08x\n", s4_enum);
 					uint64_t file_offset = struct4_ptr[s4_enum].off;
 					uint32_t file_size = struct4_ptr[s4_enum].len;
-					write_found_file(data, iobuf, argv[1], file_offset, file_size, false, 0);
+					if(program_mode == MODE_REPLACE_NAME)
+					{
+						if(repl_clean_struct4_ptr[s4_enum].off != struct4_ptr[s4_enum].off)
+						{
+							puts("ERROR: Read in structs file does not match with data.arc structs, abort");
+							break;
+						}
+						uint32_t max_file_size = repl_clean_struct4_ptr[s4_enum].len;
+						printf("Absolute File Offset: %08x%08x, Max File Size: %08x\n", (uint32_t)(file_offset>>32), (uint32_t)(file_offset&0xFFFFFFFF), max_file_size);
+						if(repl_size_decmp > max_file_size)
+							printf("Unable to replace file, got %08x bytes in but only %08x bytes are available!\n", repl_size_decmp, max_file_size);
+						else
+						{
+							//write in new data
+							fseeko64(data, file_offset, SEEK_SET);
+							fwrite(repl_buf_decmp, 1, repl_size_decmp, data);
+							//update length in struct
+							struct4_ptr[s4_enum].len = repl_size_decmp;
+							fseeko64(data, hdr2_struct4_off, SEEK_SET);
+							fwrite((void*)struct4_ptr, 1, hdr2_struct4_len, data);
+							printf("Replaced file and updated size in header!\n");
+						}
+					}
+					else
+						write_found_file(data, iobuf, find_name_full, file_offset, file_size, false, 0);
 					break;
 				}
 			}
-			//done parsing
-			free(raw_struct2_buf);
-			free(raw_struct3_buf);
-			free(raw_struct4_buf);
 		}
 		else
 		{
 			puts("Non-stream file, looking in upper structs");
-			//skip to struct 6
-			fseeko64(data, hdr1.hdr2_off+sizeof(arc_hdr2), SEEK_SET);
-			fseeko64(data, hdr2_struct1_len, SEEK_CUR);
-			fseeko64(data, hdr2_struct2_len, SEEK_CUR);
-			fseeko64(data, hdr2_struct3_len, SEEK_CUR);
-			fseeko64(data, hdr2_struct4_len, SEEK_CUR);
-			fseeko64(data, hdr2_struct5_len, SEEK_CUR);
-			//read struct 6
-			printf("Reading struct 6 (struct len %08x, total %08x bytes)\n", sizeof(hdr2_struct6), hdr2_struct6_len);
-			void *raw_struct6_buf = malloc(hdr2_struct6_len);
-			fread(raw_struct6_buf, 1, hdr2_struct6_len, data);
-			hdr2_struct6 *struct6_ptr = (hdr2_struct6*)raw_struct6_buf;
-			printf("First struct 6 crc32 %08x\n", struct6_ptr[0].fullgrouphash);
-			//read struct 7
-			printf("Reading struct 7 (struct len %08x, total %08x bytes)\n", sizeof(hdr2_struct7), hdr2_struct7_len);
-			void *raw_struct7_buf = malloc(hdr2_struct7_len);
-			fread(raw_struct7_buf, 1, hdr2_struct7_len, data);
-			hdr2_struct7 *struct7_ptr = (hdr2_struct7*)raw_struct7_buf;
-			//skip struct 8
-			printf("Skipping over struct 8 (struct len %08x, total %08x bytes)\n", sizeof(hdr2_struct8), hdr2_struct8_len);
-			fseeko64(data, hdr2_struct8_len, SEEK_CUR);
-			//read struct 9
-			printf("Reading struct 9 (struct len %08x, total %08x bytes)\n", sizeof(hdr2_struct9), hdr2_struct9_len);
-			void *raw_struct9_buf = malloc(hdr2_struct9_len);
-			fread(raw_struct9_buf, 1, hdr2_struct9_len, data);
-			hdr2_struct9 *struct9_ptr = (hdr2_struct9*)raw_struct9_buf;
-			printf("First struct 9 crc32 %08x\n", struct9_ptr[0].fullpathhash);
-			//read struct 10
-			printf("Reading struct 10 (struct len %08x, total %08x bytes)\n", sizeof(hdr2_struct10), hdr2_struct10_len);
-			void *raw_struct10_buf = malloc(hdr2_struct10_len);
-			fread(raw_struct10_buf, 1, hdr2_struct10_len, data);
-			hdr2_struct10 *struct10_ptr = (hdr2_struct10*)raw_struct10_buf;
-			//hash filename
-			uint32_t thecrc32 = crc32simple(argv[1], strlen(argv[1]));
-			printf("Seaching for file CRC32 %08x\n", thecrc32);
 			//parse struct 9
 			uint32_t s9num;
 			for(s9num = 0; s9num < hdr2.struct9_14_enum1; s9num++)
 			{
-				if(struct9_ptr[s9num].fullpathhash == thecrc32 && struct9_ptr[s9num].fullpathhashlen == strlen(argv[1]))
+				if(struct9_ptr[s9num].fullpathhash == thecrc32 && struct9_ptr[s9num].fullpathhashlen == strlen(find_name_full))
 				{
 					printf("Found file at struct 9 entry %08x!\n", s9num);
 					uint32_t s6_11_enum = struct9_ptr[s9num].struct6_11_enum[0] | (struct9_ptr[s9num].struct6_11_enum[1] << 8) 
@@ -680,7 +778,8 @@ int main(int argc, char *argv[])
 					uint32_t s7_enum = struct6_ptr[s6_11_enum].struct7_enum[0] | (struct6_ptr[s6_11_enum].struct7_enum[1] << 8) 
 									| (struct6_ptr[s6_11_enum].struct7_enum[2] << 16);
 					uint32_t s10_enum = struct9_ptr[s9num].struct10_enum;
-					if(!struct10_ptr[s10_enum].file_len_decmp) //empty file
+					uint32_t file_size_decmp = struct10_ptr[s10_enum].file_len_decmp;
+					if(!file_size_decmp) //empty file
 					{
 						puts("No decmp filesize, exit\n");
 						break;
@@ -694,41 +793,150 @@ int main(int argc, char *argv[])
 										| (struct6_ptr[s6_11_enum].struct7_enum[2] << 16);
 						s10_enum = struct9_ptr[s9_link_enum].struct10_enum;
 						printf("File in table 1 linked to s9 entry %08x\n", s9_link_enum);
+						if(file_size_decmp != struct10_ptr[s10_enum].file_len_decmp)
+						{
+							puts("ERROR: File linked size unexpected, abort\n");
+							break;
+						}
 					}
 					else if((struct10_ptr[s10_enum].flags&0x08000000)) //file is part of table 2!
 					{
 						s7_enum = struct7_ptr[s7_enum].s7_tbl2_ref;
 						s10_enum = hdr2.struct10_enum_part1+(struct10_ptr[s10_enum].flags&0x00FFFFFF);
+						//(struct10_ptr[s10_enum].flags&0x00FFFFFF) actually points to the original s9 entry now
 						printf("File in table 2 linked to s9 entry %08x\n", (struct10_ptr[s10_enum].flags&0x00FFFFFF));
+						if(file_size_decmp != struct10_ptr[s10_enum].file_len_decmp)
+						{
+							puts("ERROR: File linked size unexpected, abort\n");
+							break;
+						}
+						else if(!(struct10_ptr[s10_enum].flags&0x08000000))
+						{
+							puts("ERROR: File linked no longer points into table 2!");
+							break;
+						}
 					}
 					else if(struct10_ptr[s10_enum].flags && (struct10_ptr[s10_enum].flags&0x03000000) != 0x03000000)
-						printf("Unknown struct 10 flag %08x\n", struct10_ptr[s10_enum].flags);
+						printf("WARNING: Unknown struct 10 flag %08x\n", struct10_ptr[s10_enum].flags);
 					uint64_t file_offset = hdr1.fil1_off+struct7_ptr[s7_enum].base_offset+(struct10_ptr[s10_enum].file_local_offset<<2);
-					uint32_t file_size = struct10_ptr[s10_enum].file_len_cmp;
-					if(!file_size) //should never happen
+					uint32_t file_size_cmp = struct10_ptr[s10_enum].file_len_cmp;
+					if(!file_size_cmp) //should never happen
 					{
-						puts("No cmp filesize, exit\n");
+						puts("ERROR: No cmp filesize, exit\n");
 						break;
 					}
-					if((struct10_ptr[s10_enum].flags&0x03000000) == 0x03000000)
+					if(program_mode == MODE_REPLACE_NAME)
 					{
-						puts("File compressed, attempting to decompress");
-						write_found_file(data, iobuf, argv[1], file_offset, file_size, true, struct10_ptr[s10_enum].file_len_decmp);
+						if(repl_clean_struct10_ptr[s10_enum].flags != struct10_ptr[s10_enum].flags ||
+							repl_clean_struct10_ptr[s10_enum].file_local_offset != struct10_ptr[s10_enum].file_local_offset)
+						{
+							puts("ERROR: Read in structs file does not match with data.arc structs, abort");
+							break;
+						}
+						uint32_t max_file_size_cmp = repl_clean_struct10_ptr[s10_enum].file_len_cmp;
+						printf("Absolute File Offset: %08x%08x, Max File Size: %08x\n", (uint32_t)(file_offset>>32), (uint32_t)(file_offset&0xFFFFFFFF), max_file_size_cmp);
+						//actually compressed, compress our file too
+						if((struct10_ptr[s10_enum].flags&0x03000000) == 0x03000000)
+						{
+							puts("File compressed, compressing replacement file");
+							size_t cmp_size_tmp = ZSTD_compressBound(repl_size_decmp);
+							repl_buf_cmp = malloc(cmp_size_tmp);
+							if(!repl_buf_cmp)
+							{
+								printf("Unable to allocate %i bytes, abort", cmp_size_tmp);
+								break;
+							}
+							//19 is said to be the "max safe" compression value, game seems to be using around 11,
+							//so this should be safe to use without causing any actual issues while providing more space
+							size_t cmp_size = ZSTD_compress(repl_buf_cmp, cmp_size_tmp, repl_buf_decmp, repl_size_decmp, 19);
+							if(ZSTD_isError(cmp_size))
+							{
+								puts("ERROR: Unable to compress file, exit\n");
+								break;
+							}
+							else
+							{
+								repl_size_cmp = cmp_size;
+								printf("File compressed to %08x bytes\n", repl_size_cmp);
+							}
+						}
+						if(repl_size_cmp > max_file_size_cmp)
+							printf("Unable to replace file, got %08x bytes in but only %08x bytes are available!\n", repl_size_cmp, max_file_size_cmp);
+						else
+						{
+							//write in new data
+							fseeko64(data, file_offset, SEEK_SET);
+							fwrite(repl_buf_cmp, 1, repl_size_cmp, data);
+							//update lengths in structs
+							struct10_ptr[s10_enum].file_len_cmp = repl_size_cmp;
+							struct10_ptr[s10_enum].file_len_decmp = repl_size_decmp;
+							uint32_t s10_max = hdr2.struct10_enum_part1+hdr2.struct10_enum_part2;
+							uint32_t s10_search_num;
+							if(struct10_ptr[s10_enum].flags&0x08000000)
+							{
+								//find update tbl2 references
+								uint32_t s10_search_flag = (struct10_ptr[s10_enum].flags&0x0B000000) | s10_enum;
+								for(s10_search_num = 0; s10_search_num < s10_max; s10_search_num++)
+								{
+									if(struct10_ptr[s10_search_num].file_len_cmp == file_size_cmp &&
+										struct10_ptr[s10_search_num].file_len_decmp == file_size_decmp &&
+										struct10_ptr[s10_search_num].flags == s10_search_flag)
+									{
+										struct10_ptr[s10_search_num].file_len_cmp = repl_size_cmp;
+										struct10_ptr[s10_search_num].file_len_decmp = repl_size_decmp;
+										printf("Updated table 2 link s10 entry %08x\n", s10_search_num);
+									}
+								}
+							}
+							else
+							{
+								//find and update tbl1 references
+								uint32_t s10_search_flag = (struct10_ptr[s10_enum].flags&0x03000000) | s10_enum;
+								for(s10_search_num = 0; s10_search_num < s10_max; s10_search_num++)
+								{
+									if(struct10_ptr[s10_search_num].file_len_cmp == 0 && //tbl1 links seem to have no cmp size
+										struct10_ptr[s10_search_num].file_len_decmp == file_size_decmp &&
+										struct10_ptr[s10_search_num].flags == s10_search_flag)
+									{
+										struct10_ptr[s10_search_num].file_len_cmp = repl_size_cmp;
+										struct10_ptr[s10_search_num].file_len_decmp = repl_size_decmp;
+										printf("Updated table 1 link s10 entry %08x\n", s10_search_num);
+									}
+								}
+							}
+							fseeko64(data, hdr2_struct10_off, SEEK_SET);
+							fwrite((void*)struct10_ptr, 1, hdr2_struct10_len, data);
+							printf("Replaced file and updated size in header!\n");
+						}
 					}
 					else
-						write_found_file(data, iobuf, argv[1], file_offset, file_size, false, 0);
+					{
+						if((struct10_ptr[s10_enum].flags&0x03000000) == 0x03000000)
+						{
+							puts("File compressed, attempting to decompress");
+							write_found_file(data, iobuf, find_name_full, file_offset, file_size_cmp, true, file_size_decmp);
+						}
+						else
+							write_found_file(data, iobuf, find_name_full, file_offset, file_size_cmp, false, 0);
+					}
 					break;
 				}
 			}
-			//done parsing
-			free(raw_struct6_buf);
-			free(raw_struct7_buf);
-			free(raw_struct9_buf);
-			free(raw_struct10_buf);
 		}
 	}
 	puts("Done!");
-	fclose(data);
-	free(iobuf);
+end:
+	if(data) fclose(data);
+	if(repl_file) fclose(repl_file);
+	if(clean_structs_fp) fclose(clean_structs_fp);
+	if(repl_buf_cmp) free(repl_buf_cmp); if(repl_buf_decmp) free(repl_buf_decmp);
+	if(iobuf) free(iobuf);
+	if(struct1_ptr) free(struct1_ptr); if(struct2_ptr) free(struct2_ptr);
+	if(struct3_ptr) free(struct3_ptr); if(struct4_ptr) free(struct4_ptr);
+	if(struct5_ptr) free(struct5_ptr); if(struct6_ptr) free(struct6_ptr);
+	if(struct7_ptr) free(struct7_ptr); if(struct8_ptr) free(struct8_ptr);
+	if(struct9_ptr) free(struct9_ptr); if(struct10_ptr) free(struct10_ptr);
+	if(repl_clean_struct4_ptr) free(repl_clean_struct4_ptr);
+	if(repl_clean_struct10_ptr) free(repl_clean_struct10_ptr);
 	return 0;
 }
