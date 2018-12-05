@@ -406,7 +406,7 @@ static const char *get_fname(const char *path)
 
 int main(int argc, char *argv[])
 {
-	puts("Smash Ultimate ARC Extract WIP-5 by FIX94");
+	puts("Smash Ultimate ARC Extract WIP-6 by FIX94");
 	FILE *data = NULL, *repl_file = NULL, *clean_structs_fp = NULL;
 	hdr2_struct1 *struct1_ptr = NULL; hdr2_struct2 *struct2_ptr = NULL;
 	hdr2_struct3 *struct3_ptr = NULL; hdr2_struct4 *struct4_ptr = NULL;
@@ -542,7 +542,7 @@ int main(int argc, char *argv[])
 	struct9_ptr = (hdr2_struct9*)read_struct_raw(data, hdr2_struct9_off, hdr2_struct9_len);
 	struct10_ptr = (hdr2_struct10*)read_struct_raw(data, hdr2_struct10_off, hdr2_struct10_len);
 	//replace mode, open file further for writing
-	if(repl_buf_decmp)
+	if(program_mode == MODE_REPLACE_NAME)
 	{
 		clean_structs_fp = fopen("data_arc_structs", "rb");
 		if(!clean_structs_fp)
@@ -770,14 +770,15 @@ int main(int argc, char *argv[])
 			uint32_t s9num;
 			for(s9num = 0; s9num < hdr2.struct9_14_enum1; s9num++)
 			{
-				if(struct9_ptr[s9num].fullpathhash == thecrc32 && struct9_ptr[s9num].fullpathhashlen == strlen(find_name_full))
+				uint32_t s9_cur_used = s9num;
+				if(struct9_ptr[s9_cur_used].fullpathhash == thecrc32 && struct9_ptr[s9_cur_used].fullpathhashlen == strlen(find_name_full))
 				{
-					printf("Found file at struct 9 entry %08x!\n", s9num);
-					uint32_t s6_11_enum = struct9_ptr[s9num].struct6_11_enum[0] | (struct9_ptr[s9num].struct6_11_enum[1] << 8) 
-									| (struct9_ptr[s9num].struct6_11_enum[2] << 16);
+					printf("Found file at struct 9 entry %08x!\n", s9_cur_used);
+					uint32_t s6_11_enum = struct9_ptr[s9_cur_used].struct6_11_enum[0] | (struct9_ptr[s9_cur_used].struct6_11_enum[1] << 8) 
+									| (struct9_ptr[s9_cur_used].struct6_11_enum[2] << 16);
 					uint32_t s7_enum = struct6_ptr[s6_11_enum].struct7_enum[0] | (struct6_ptr[s6_11_enum].struct7_enum[1] << 8) 
 									| (struct6_ptr[s6_11_enum].struct7_enum[2] << 16);
-					uint32_t s10_enum = struct9_ptr[s9num].struct10_enum;
+					uint32_t s10_enum = struct9_ptr[s9_cur_used].struct10_enum;
 					uint32_t file_size_decmp = struct10_ptr[s10_enum].file_len_decmp;
 					if(!file_size_decmp) //empty file
 					{
@@ -786,16 +787,21 @@ int main(int argc, char *argv[])
 					}
 					else if(!struct10_ptr[s10_enum].file_len_cmp) //file linked in table 1
 					{
-						uint32_t s9_link_enum = (struct10_ptr[s10_enum].flags&0x00FFFFFF);
-						s6_11_enum = struct9_ptr[s9_link_enum].struct6_11_enum[0] | (struct9_ptr[s9_link_enum].struct6_11_enum[1] << 8) 
-										| (struct9_ptr[s9_link_enum].struct6_11_enum[2] << 16);
+						s9_cur_used = (struct10_ptr[s10_enum].flags&0x00FFFFFF);
+						s6_11_enum = struct9_ptr[s9_cur_used].struct6_11_enum[0] | (struct9_ptr[s9_cur_used].struct6_11_enum[1] << 8) 
+										| (struct9_ptr[s9_cur_used].struct6_11_enum[2] << 16);
 						s7_enum = struct6_ptr[s6_11_enum].struct7_enum[0] | (struct6_ptr[s6_11_enum].struct7_enum[1] << 8) 
 										| (struct6_ptr[s6_11_enum].struct7_enum[2] << 16);
-						s10_enum = struct9_ptr[s9_link_enum].struct10_enum;
-						printf("File in table 1 linked to s9 entry %08x\n", s9_link_enum);
+						s10_enum = struct9_ptr[s9_cur_used].struct10_enum;
+						printf("File in table 1 linked to s9 entry %08x\n", s9_cur_used);
 						if(file_size_decmp != struct10_ptr[s10_enum].file_len_decmp)
 						{
 							puts("ERROR: File linked size unexpected, abort\n");
+							break;
+						}
+						else if(struct10_ptr[s10_enum].flags&0x08000000)
+						{
+							puts("ERROR: File linked no longer points into table 1!");
 							break;
 						}
 					}
@@ -872,13 +878,13 @@ int main(int argc, char *argv[])
 							//update lengths in structs
 							struct10_ptr[s10_enum].file_len_cmp = repl_size_cmp;
 							struct10_ptr[s10_enum].file_len_decmp = repl_size_decmp;
-							uint32_t s10_max = hdr2.struct10_enum_part1+hdr2.struct10_enum_part2;
 							uint32_t s10_search_num;
 							if(struct10_ptr[s10_enum].flags&0x08000000)
 							{
 								//find update tbl2 references
-								uint32_t s10_search_flag = (struct10_ptr[s10_enum].flags&0x0B000000) | s10_enum;
-								for(s10_search_num = 0; s10_search_num < s10_max; s10_search_num++)
+								uint32_t s10_search_flag = (s10_enum-hdr2.struct10_enum_part1) | (struct10_ptr[s10_enum].flags&0x0B000000);
+								uint32_t s10_max = hdr2.struct10_enum_part1+hdr2.struct10_enum_part2;
+								for(s10_search_num = hdr2.struct10_enum_part1; s10_search_num < s10_max; s10_search_num++)
 								{
 									if(struct10_ptr[s10_search_num].file_len_cmp == file_size_cmp &&
 										struct10_ptr[s10_search_num].file_len_decmp == file_size_decmp &&
@@ -893,12 +899,11 @@ int main(int argc, char *argv[])
 							else
 							{
 								//find and update tbl1 references
-								uint32_t s10_search_flag = (struct10_ptr[s10_enum].flags&0x03000000) | s10_enum;
-								for(s10_search_num = 0; s10_search_num < s10_max; s10_search_num++)
+								for(s10_search_num = 0; s10_search_num < hdr2.struct10_enum_part1; s10_search_num++)
 								{
 									if(struct10_ptr[s10_search_num].file_len_cmp == 0 && //tbl1 links seem to have no cmp size
 										struct10_ptr[s10_search_num].file_len_decmp == file_size_decmp &&
-										struct10_ptr[s10_search_num].flags == s10_search_flag)
+										struct10_ptr[s10_search_num].flags == s9_cur_used) //tbl1 just points to original s9 entry
 									{
 										struct10_ptr[s10_search_num].file_len_cmp = repl_size_cmp;
 										struct10_ptr[s10_search_num].file_len_decmp = repl_size_decmp;
