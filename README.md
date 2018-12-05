@@ -1,7 +1,7 @@
 # ssbu-arc-extract  
 Aims to extract various files from the ssbu data.arc.  
 See the "releases" tab for a per-built executable.  
-You can put the executable right next to the data.arc and then use this tool in 2 different modes.    
+You can put the executable right next to the data.arc and then use this tool in 3 different modes.    
 
 Mode 1:  
 When you just run it without any arguments, it will output all music into a "lopus" and all video into a "webm" folder.  
@@ -16,6 +16,10 @@ I'm not sure where those filenames are actually located, to give you a simple ex
 sound/bank/common/se_common.nus3audio  
 Also you can individually extract the music and video files that get extrated above using the stream:/ prefix, so a path like this for example:  
 stream:/sound/bgm/bgm_crs2_49_commonsilent_lp.nus3audio    
+
+Mode 3:  
+This is an addition to mode 2, when using "replace" in front of the full filepath, it will try and open the file in the current directory as was extracted using mode 2 and replace it in the data.arc, it will also automatically try and update the sizes in the main struct as well as compress the file if it was originally compressed.  
+Also, a "data_arc_structs" will be created next to the data.arc on first use and will then be used on the next uses, make sure to keep this file saved somewhere as it contains the original filesizes and all, this tool will only place in the new file in replace mode if the new size is smaller or equal to the original one, which is determined by looking at this structs file created on first use! This mode is experimental so also make sure to keep some backup of the data.arc itself too.    
 
 About the full music and video file structure:  
 All music filenames are kept in a database in another file you can grab using mode 2:  
