@@ -406,7 +406,7 @@ static const char *get_fname(const char *path)
 
 int main(int argc, char *argv[])
 {
-	puts("Smash Ultimate ARC Extract WIP-4 by FIX94");
+	puts("Smash Ultimate ARC Extract WIP-5 by FIX94");
 	FILE *data = NULL, *repl_file = NULL, *clean_structs_fp = NULL;
 	hdr2_struct1 *struct1_ptr = NULL; hdr2_struct2 *struct2_ptr = NULL;
 	hdr2_struct3 *struct3_ptr = NULL; hdr2_struct4 *struct4_ptr = NULL;
@@ -860,13 +860,15 @@ int main(int argc, char *argv[])
 								printf("File compressed to %08x bytes\n", repl_size_cmp);
 							}
 						}
+						else //no compression, same cmp and decmp size
+							repl_size_cmp = repl_size_decmp;
 						if(repl_size_cmp > max_file_size_cmp)
 							printf("Unable to replace file, got %08x bytes in but only %08x bytes are available!\n", repl_size_cmp, max_file_size_cmp);
 						else
 						{
 							//write in new data
 							fseeko64(data, file_offset, SEEK_SET);
-							fwrite(repl_buf_cmp, 1, repl_size_cmp, data);
+							fwrite(repl_buf_cmp ? repl_buf_cmp : repl_buf_decmp, 1, repl_size_cmp, data);
 							//update lengths in structs
 							struct10_ptr[s10_enum].file_len_cmp = repl_size_cmp;
 							struct10_ptr[s10_enum].file_len_decmp = repl_size_decmp;
